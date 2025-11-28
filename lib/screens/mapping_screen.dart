@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../services/mapping_service.dart';
+import '../services/map_storage_service.dart';
+import '../models/map_model.dart';
+import '../providers/robot_url_provider.dart';
 
 class MappingScreen extends StatefulWidget {
   const MappingScreen({super.key});
@@ -13,11 +17,13 @@ class _MappingScreenState extends State<MappingScreen> {
   final TextEditingController _portController = TextEditingController();
 
   late MappingService _mappingService;
+  late MapStorageService _storageService;
 
   bool _isConnected = false;
   bool _isMappingStarted = false;
   bool _isAutoMode = false;
   bool _isManualMode = false;
+  bool _isSaving = false;
   String _statusMessage = 'Ready to connect';
 
   String? _currentDirection;
@@ -27,6 +33,7 @@ class _MappingScreenState extends State<MappingScreen> {
   void initState() {
     super.initState();
     _portController.text = '5000';
+    _storageService = MapStorageService();
   }
 
   @override
@@ -63,6 +70,11 @@ class _MappingScreenState extends State<MappingScreen> {
           _statusMessage = 'Connected to robot at $_robotUrl';
         });
         _showMessage('Connected to robot', Colors.green);
+
+        if (mounted) {
+          Provider.of<RobotUrlProvider>(context, listen: false)
+              .setRobotUrl(_robotUrl);
+        }
       } else {
         _showMessage('Failed to connect to robot', Colors.red);
       }
@@ -126,13 +138,63 @@ class _MappingScreenState extends State<MappingScreen> {
       return;
     }
 
+    setState(() {
+      _isSaving = true;
+      _statusMessage = 'Saving map...';
+    });
+
     try {
       final result = await _mappingService.saveMapping();
-      setState(() {
-        _statusMessage = result;
-      });
-      _showMessage(result, Colors.green);
+
+      if (!mounted) return;
+
+      if (result['success'] == true) {
+        final waypoints = [
+          Waypoint(
+            id: 'wp_1',
+            name: 'Start Point',
+            x: 0.0,
+            y: 0.0,
+            theta: 0.0,
+          ),
+          Waypoint(
+            id: 'wp_2',
+            name: 'Mid Point',
+            x: 5.0,
+            y: 5.0,
+            theta: 45.0,
+          ),
+        ];
+
+        final savedMap = SavedMap(
+          id: DateTime.now().millisecondsSinceEpoch.toString(),
+          name: 'Map_${DateTime.now().toString().split('.')[0]}',
+          imagePath: 'assets/maps/map_${DateTime.now().millisecondsSinceEpoch}.png',
+          mapXmlPath: 'assets/maps/map_${DateTime.now().millisecondsSinceEpoch}.xml',
+          waypointsXmlPath: 'assets/maps/waypoints_${DateTime.now().millisecondsSinceEpoch}.xml',
+          createdAt: DateTime.now(),
+          waypoints: waypoints,
+        );
+
+        await _storageService.saveMap(savedMap);
+
+        setState(() {
+          _isSaving = false;
+          _statusMessage = 'Map saved successfully!';
+        });
+
+        _showMessage('Map saved successfully!', Colors.green);
+
+      } else {
+        setState(() {
+          _isSaving = false;
+        });
+        _showMessage(result['message'] ?? 'Failed to save map', Colors.red);
+      }
     } catch (e) {
+      setState(() {
+        _isSaving = false;
+      });
       _showMessage('Error: $e', Colors.red);
     }
   }
@@ -395,16 +457,28 @@ class _MappingScreenState extends State<MappingScreen> {
                   const SizedBox(height: 8),
                   if (!_isMappingStarted)
                     ElevatedButton(
-                      onPressed: _saveMapping,
+                      onPressed: _isSaving ? null : _saveMapping,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.green,
+                        disabledBackgroundColor: Colors.grey,
                       ),
-                      child: const Padding(
-                        padding: EdgeInsets.all(12),
-                        child: Text(
-                          'Save Map',
-                          style: TextStyle(color: Colors.white),
-                        ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: _isSaving
+                            ? const SizedBox(
+                                height: 20,
+                                width: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    Colors.white,
+                                  ),
+                                ),
+                              )
+                            : const Text(
+                                'Save Map',
+                                style: TextStyle(color: Colors.white),
+                              ),
                       ),
                     ),
                 ],
@@ -483,7 +557,6 @@ class _MappingScreenState extends State<MappingScreen> {
                       height: 250,
                       child: Stack(
                         children: [
-                          // Up button
                           Positioned(
                             top: 0,
                             left: 0,
@@ -492,11 +565,9 @@ class _MappingScreenState extends State<MappingScreen> {
                               child: _buildDirectionButton(
                                 icon: Icons.arrow_upward,
                                 direction: 'forward',
-                                label: 'Forward',
                               ),
                             ),
                           ),
-                          // Down button
                           Positioned(
                             bottom: 0,
                             left: 0,
@@ -505,11 +576,9 @@ class _MappingScreenState extends State<MappingScreen> {
                               child: _buildDirectionButton(
                                 icon: Icons.arrow_downward,
                                 direction: 'backward',
-                                label: 'Backward',
                               ),
                             ),
                           ),
-                          // Left button
                           Positioned(
                             left: 0,
                             top: 0,
@@ -518,11 +587,9 @@ class _MappingScreenState extends State<MappingScreen> {
                               child: _buildDirectionButton(
                                 icon: Icons.arrow_back,
                                 direction: 'left',
-                                label: 'Left',
                               ),
                             ),
                           ),
-                          // Right button
                           Positioned(
                             right: 0,
                             top: 0,
@@ -531,11 +598,9 @@ class _MappingScreenState extends State<MappingScreen> {
                               child: _buildDirectionButton(
                                 icon: Icons.arrow_forward,
                                 direction: 'right',
-                                label: 'Right',
                               ),
                             ),
                           ),
-                          // Stop button in center
                           Center(
                             child: GestureDetector(
                               onTap: () =>
@@ -570,7 +635,6 @@ class _MappingScreenState extends State<MappingScreen> {
   Widget _buildDirectionButton({
     required IconData icon,
     required String direction,
-    required String label,
   }) {
     return GestureDetector(
       onTapDown: (_) => _startMovement(direction),
