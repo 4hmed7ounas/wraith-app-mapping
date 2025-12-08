@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../models/map_model.dart';
-import '../services/map_storage_service.dart';
+import '../services/mapping_service.dart';
+import '../providers/robot_url_provider.dart';
 
 class MapsScreen extends StatefulWidget {
   const MapsScreen({super.key});
@@ -10,14 +12,13 @@ class MapsScreen extends StatefulWidget {
 }
 
 class _MapsScreenState extends State<MapsScreen> {
-  late MapStorageService _storageService;
+  MappingService? _mappingService;
   List<SavedMap> _maps = [];
   bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    _storageService = MapStorageService();
     _loadMaps();
   }
 
@@ -27,9 +28,72 @@ class _MapsScreenState extends State<MapsScreen> {
     });
 
     try {
-      await _storageService.loadMaps();
+      // Get robot URL from provider
+      final robotUrl = Provider.of<RobotUrlProvider>(context, listen: false).robotUrl;
+
+      if (robotUrl.isEmpty) {
+        setState(() {
+          _isLoading = false;
+          _maps = [];
+        });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Please connect to robot first from the Control tab'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+
+      // Create MappingService with robot URL
+      _mappingService = MappingService(robotUrl: robotUrl);
+
+      // Fetch maps from Flask API
+      final mapsList = await _mappingService!.listMaps();
+
+      // Convert API response to SavedMap objects
+      List<SavedMap> loadedMaps = [];
+      for (var mapData in mapsList) {
+        try {
+          // Get waypoints for this map
+          final waypointsData = await _mappingService!.getWaypoints(
+            mapName: mapData['name'],
+          );
+
+          List<Waypoint> waypoints = [];
+          if (waypointsData['status'] == 'ok' && waypointsData['waypoints'] != null) {
+            waypoints = (waypointsData['waypoints'] as List).map((wp) {
+              return Waypoint(
+                id: wp['label'] ?? 'unknown',
+                name: wp['label'] ?? 'Waypoint',
+                x: (wp['x'] as num).toDouble(),
+                y: (wp['y'] as num).toDouble(),
+                theta: (wp['theta'] as num).toDouble(),
+              );
+            }).toList();
+          }
+
+          // Create SavedMap object
+          loadedMaps.add(SavedMap(
+            id: mapData['name'],
+            name: mapData['name'],
+            imagePath: '', // Image will be loaded on demand
+            mapXmlPath: '',
+            waypointsXmlPath: '',
+            createdAt: DateTime.fromMillisecondsSinceEpoch(
+              (mapData['created'] * 1000).toInt(),
+            ),
+            waypoints: waypoints,
+          ));
+        } catch (e) {
+          debugPrint('Error loading map ${mapData['name']}: $e');
+        }
+      }
+
       setState(() {
-        _maps = _storageService.getSortedMaps();
+        _maps = loadedMaps;
         _isLoading = false;
       });
     } catch (e) {
@@ -78,49 +142,6 @@ class _MapsScreenState extends State<MapsScreen> {
     );
   }
 
-  Future<void> _deleteMap(SavedMap map) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete Map'),
-        content: Text('Are you sure you want to delete "${map.name}"?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed == true) {
-      try {
-        await _storageService.deleteMap(map.id);
-        _loadMaps();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Map deleted successfully'),
-              backgroundColor: Colors.green,
-            ),
-          );
-        }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Error deleting map: $e'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
-      }
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -236,20 +257,6 @@ class _MapsScreenState extends State<MapsScreen> {
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                               color: Colors.grey[600],
                             ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      TextButton.icon(
-                        onPressed: () => _deleteMap(map),
-                        icon: const Icon(Icons.delete_outline),
-                        label: const Text('Delete'),
-                        style: TextButton.styleFrom(
-                          foregroundColor: Colors.red,
-                        ),
                       ),
                     ],
                   ),

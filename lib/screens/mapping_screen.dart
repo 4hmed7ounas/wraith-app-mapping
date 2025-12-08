@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/mapping_service.dart';
-import '../services/map_storage_service.dart';
-import '../models/map_model.dart';
 import '../providers/robot_url_provider.dart';
 
 class MappingScreen extends StatefulWidget {
@@ -17,7 +15,6 @@ class _MappingScreenState extends State<MappingScreen> {
   final TextEditingController _portController = TextEditingController();
 
   late MappingService _mappingService;
-  late MapStorageService _storageService;
 
   bool _isConnected = false;
   bool _isMappingStarted = false;
@@ -34,7 +31,6 @@ class _MappingScreenState extends State<MappingScreen> {
   void initState() {
     super.initState();
     _portController.text = '5000';
-    _storageService = MapStorageService();
     _loadRobotUrlFromProvider();
   }
 
@@ -196,8 +192,6 @@ class _MappingScreenState extends State<MappingScreen> {
 
       if (result['status'] == 'ok') {
         // Parse waypoints from result
-        final waypointFiles = result['files'];
-
         setState(() {
           _isSaving = false;
           _statusMessage = 'Map saved: ${result['map_name']}';
@@ -498,10 +492,10 @@ class _MappingScreenState extends State<MappingScreen> {
                       ),
                     ),
 
-                  // Save Map button (shown when mapping is stopped)
-                  if (!_isMappingStarted && !_isSaving)
+                  // Save Map button (always shown)
+                  if (!_isSaving)
                     ElevatedButton.icon(
-                      onPressed: _saveMapping,
+                      onPressed: _isConnected ? _saveMapping : null,
                       icon: const Icon(Icons.save),
                       label: const Padding(
                         padding: EdgeInsets.all(12),
@@ -514,7 +508,7 @@ class _MappingScreenState extends State<MappingScreen> {
                         backgroundColor: Colors.green,
                       ),
                     )
-                  else if (_isSaving)
+                  else
                     ElevatedButton(
                       onPressed: null,
                       style: ElevatedButton.styleFrom(
