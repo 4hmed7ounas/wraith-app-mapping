@@ -2,23 +2,25 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/map_model.dart';
 import '../services/mapping_service.dart';
+import '../services/map_storage_service.dart';
 import '../providers/robot_url_provider.dart';
+import 'dart:io';
 
 class MapDetailScreen extends StatefulWidget {
-  final SavedMap map;
-
-  const MapDetailScreen({
-    super.key,
-    required this.map,
-  });
+  const MapDetailScreen({super.key});
 
   @override
   State<MapDetailScreen> createState() => _MapDetailScreenState();
 }
 
 class _MapDetailScreenState extends State<MapDetailScreen> {
+  final TextEditingController _mapNameController = TextEditingController();
+  final MapStorageService _storageService = MapStorageService();
+
+  SavedMap? _currentMap;
   Waypoint? _selectedWaypoint;
   bool _isNavigating = false;
+  bool _isLoading = false;
   late MappingService _mappingService;
 
   @override
@@ -31,14 +33,104 @@ class _MapDetailScreenState extends State<MapDetailScreen> {
     _mappingService = MappingService(robotUrl: robotUrl);
   }
 
+  @override
+  void dispose() {
+    _mapNameController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadMapByName() async {
+    final mapName = _mapNameController.text.trim();
+
+    if (mapName.isEmpty) {
+      _showMessage('Please enter a map name', Colors.orange);
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      // Search for map by name
+      final maps = _storageService.searchMaps(mapName);
+
+      if (maps.isEmpty) {
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+            _currentMap = null;
+          });
+          _showMessage('No map found with name: $mapName', Colors.red);
+        }
+        return;
+      }
+
+      // Get the first matching map
+      final foundMap = maps.first;
+
+      // Try to load waypoints from XML file if it exists
+      List<Waypoint> waypoints = foundMap.waypoints;
+
+      if (foundMap.waypointsXmlPath.isNotEmpty) {
+        try {
+          final file = File(foundMap.waypointsXmlPath);
+          if (await file.exists()) {
+            final xmlContent = await file.readAsString();
+            waypoints = await _storageService.parseWaypoints(xmlContent);
+
+            // Update map with parsed waypoints
+            final updatedMap = SavedMap(
+              id: foundMap.id,
+              name: foundMap.name,
+              imagePath: foundMap.imagePath,
+              mapXmlPath: foundMap.mapXmlPath,
+              waypointsXmlPath: foundMap.waypointsXmlPath,
+              createdAt: foundMap.createdAt,
+              waypoints: waypoints,
+            );
+
+            if (mounted) {
+              setState(() {
+                _currentMap = updatedMap;
+                _isLoading = false;
+              });
+              _showMessage('Map loaded with ${waypoints.length} waypoints', Colors.green);
+            }
+            return;
+          }
+        } catch (e) {
+          // XML parsing failed, use existing waypoints
+          // Silently continue with existing waypoints
+        }
+      }
+
+      // Use existing waypoints if XML loading failed or doesn't exist
+      if (mounted) {
+        setState(() {
+          _currentMap = foundMap;
+          _isLoading = false;
+        });
+        _showMessage('Map loaded with ${waypoints.length} waypoints', Colors.green);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+        _showMessage('Error loading map: $e', Colors.red);
+      }
+    }
+  }
+
   Future<void> _navigateToWaypoint() async {
     if (_selectedWaypoint == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please select a waypoint'),
-          backgroundColor: Colors.orange,
-        ),
-      );
+      _showMessage('Please select a waypoint', Colors.orange);
+      return;
+    }
+
+    if (_currentMap == null) {
+      _showMessage('No map loaded', Colors.orange);
       return;
     }
 
@@ -47,9 +139,8 @@ class _MapDetailScreenState extends State<MapDetailScreen> {
     });
 
     try {
-      final result = await _mappingService.navigateToWaypoint(
-        widget.map.name,
-        _selectedWaypoint!.id,
+      await _mappingService.navigateToWaypoint(
+        waypoint: _selectedWaypoint!.id,
       );
 
       if (mounted) {
@@ -57,12 +148,7 @@ class _MapDetailScreenState extends State<MapDetailScreen> {
           _isNavigating = false;
         });
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(result),
-            backgroundColor: Colors.green,
-          ),
-        );
+        _showMessage('Navigation started to ${_selectedWaypoint!.name}', Colors.green);
       }
     } catch (e) {
       if (mounted) {
@@ -70,143 +156,191 @@ class _MapDetailScreenState extends State<MapDetailScreen> {
           _isNavigating = false;
         });
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Navigation error: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        _showMessage('Navigation error: $e', Colors.red);
       }
     }
+  }
+
+  void _showMessage(String message, Color color) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: color,
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.map.name),
+        title: const Text('Map Waypoint Navigator'),
         centerTitle: true,
       ),
       body: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Map preview
-            Container(
-              height: 300,
-              width: double.infinity,
-              color: Colors.grey[300],
-              child: Center(
-                child: Icon(
-                  Icons.map_outlined,
-                  size: 100,
-                  color: Colors.grey[600],
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Map name input section
+              Card(
+                elevation: 2,
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Load Map',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: _mapNameController,
+                        decoration: InputDecoration(
+                          labelText: 'Enter Map Name',
+                          hintText: 'e.g., Map_2024-01-01',
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          prefixIcon: const Icon(Icons.map),
+                        ),
+                        onSubmitted: (_) => _loadMapByName(),
+                      ),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: _isLoading ? null : _loadMapByName,
+                          icon: _isLoading
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.search),
+                          label: Text(_isLoading ? 'Loading...' : 'Load Map'),
+                          style: ElevatedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            backgroundColor: Colors.blue,
+                            foregroundColor: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-            // Map details
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Map info
-                  Text(
-                    'Map Information',
-                    style: Theme.of(context).textTheme.titleLarge,
+              const SizedBox(height: 20),
+
+              // Map preview and details
+              if (_currentMap != null) ...[
+                // Map preview placeholder
+                Container(
+                  height: 250,
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(8),
                   ),
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[100],
-                      borderRadius: BorderRadius.circular(8),
-                    ),
+                  child: Center(
                     child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              'Name:',
-                              style: Theme.of(context).textTheme.bodyMedium,
-                            ),
-                            Text(
-                              widget.map.name,
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodyMedium
-                                  ?.copyWith(fontWeight: FontWeight.bold),
-                            ),
-                          ],
+                        Icon(
+                          Icons.map_outlined,
+                          size: 80,
+                          color: Colors.grey[600],
                         ),
                         const SizedBox(height: 8),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              'Created:',
-                              style: Theme.of(context).textTheme.bodyMedium,
-                            ),
-                            Text(
-                              _formatDateTime(widget.map.createdAt),
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodyMedium
-                                  ?.copyWith(fontWeight: FontWeight.bold),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              'Waypoints:',
-                              style: Theme.of(context).textTheme.bodyMedium,
-                            ),
-                            Text(
-                              widget.map.waypoints.length.toString(),
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodyMedium
-                                  ?.copyWith(fontWeight: FontWeight.bold),
-                            ),
-                          ],
+                        Text(
+                          _currentMap!.name,
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.grey[700],
+                          ),
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 24),
+                ),
+                const SizedBox(height: 20),
 
-                  // Waypoints section
-                  Text(
-                    'Available Waypoints',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                  const SizedBox(height: 12),
-                  if (widget.map.waypoints.isEmpty)
-                    Center(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 32),
-                        child: Text(
-                          'No waypoints found',
-                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                color: Colors.grey[600],
-                              ),
+                // Map information
+                Card(
+                  elevation: 2,
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Map Information',
+                          style: Theme.of(context).textTheme.titleLarge,
                         ),
+                        const SizedBox(height: 12),
+                        _buildInfoRow('Name', _currentMap!.name),
+                        const SizedBox(height: 8),
+                        _buildInfoRow(
+                          'Created',
+                          _formatDateTime(_currentMap!.createdAt),
+                        ),
+                        const SizedBox(height: 8),
+                        _buildInfoRow(
+                          'Waypoints',
+                          '${_currentMap!.waypoints.length}',
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+
+                // Waypoints section
+                Text(
+                  'Available Waypoints',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                const SizedBox(height: 12),
+
+                if (_currentMap!.waypoints.isEmpty)
+                  Center(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 32),
+                      child: Column(
+                        children: [
+                          Icon(
+                            Icons.location_off,
+                            size: 48,
+                            color: Colors.grey[400],
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            'No waypoints found for this map',
+                            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                  color: Colors.grey[600],
+                                ),
+                          ),
+                        ],
                       ),
-                    )
-                  else
-                    ListView.separated(
+                    ),
+                  )
+                else
+                  // Waypoint buttons list (scrollable)
+                  Container(
+                    constraints: const BoxConstraints(maxHeight: 400),
+                    child: ListView.separated(
                       shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      itemCount: widget.map.waypoints.length,
+                      itemCount: _currentMap!.waypoints.length,
                       separatorBuilder: (context, index) =>
                           const SizedBox(height: 8),
                       itemBuilder: (context, index) {
-                        final waypoint = widget.map.waypoints[index];
+                        final waypoint = _currentMap!.waypoints[index];
                         final isSelected = _selectedWaypoint?.id == waypoint.id;
 
                         return Card(
@@ -222,61 +356,72 @@ class _MapDetailScreenState extends State<MapDetailScreen> {
                             },
                             child: Padding(
                               padding: const EdgeInsets.all(12),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                              child: Row(
                                 children: [
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Text(
-                                              waypoint.name,
-                                              style: Theme.of(context)
-                                                  .textTheme
-                                                  .titleMedium,
-                                            ),
-                                            const SizedBox(height: 4),
-                                            Text(
-                                              'ID: ${waypoint.id}',
-                                              style: Theme.of(context)
-                                                  .textTheme
-                                                  .bodySmall
-                                                  ?.copyWith(
-                                                    color: Colors.grey[600],
-                                                  ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                      if (isSelected)
-                                        Icon(
-                                          Icons.check_circle,
-                                          color: Colors.blue[600],
-                                        ),
-                                    ],
+                                  // Waypoint icon
+                                  Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: isSelected
+                                          ? Colors.blue[600]
+                                          : Colors.grey[300],
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: Icon(
+                                      Icons.location_on,
+                                      color: isSelected
+                                          ? Colors.white
+                                          : Colors.grey[700],
+                                      size: 24,
+                                    ),
                                   ),
-                                  const SizedBox(height: 8),
-                                  Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Text(
-                                        'Position: (${waypoint.x.toStringAsFixed(2)}, ${waypoint.y.toStringAsFixed(2)})',
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodySmall,
-                                      ),
-                                      Text(
-                                        'θ: ${waypoint.theta.toStringAsFixed(2)}°',
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodySmall,
-                                      ),
-                                    ],
+                                  const SizedBox(width: 12),
+
+                                  // Waypoint details
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          waypoint.name,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .titleMedium
+                                              ?.copyWith(
+                                                fontWeight: isSelected
+                                                    ? FontWeight.bold
+                                                    : FontWeight.normal,
+                                              ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          'ID: ${waypoint.id}',
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .bodySmall
+                                              ?.copyWith(
+                                                color: Colors.grey[600],
+                                              ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          'Position: (${waypoint.x.toStringAsFixed(2)}, ${waypoint.y.toStringAsFixed(2)}) | θ: ${waypoint.theta.toStringAsFixed(2)}°',
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .bodySmall,
+                                        ),
+                                      ],
+                                    ),
                                   ),
+
+                                  // Selection indicator
+                                  if (isSelected)
+                                    Icon(
+                                      Icons.check_circle,
+                                      color: Colors.blue[600],
+                                      size: 28,
+                                    ),
                                 ],
                               ),
                             ),
@@ -284,40 +429,89 @@ class _MapDetailScreenState extends State<MapDetailScreen> {
                         );
                       },
                     ),
-                  const SizedBox(height: 24),
+                  ),
+                const SizedBox(height: 20),
 
-                  // Navigate button
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: _isNavigating ? null : _navigateToWaypoint,
-                      icon: _isNavigating
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
+                // Navigate button
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: (_isNavigating || _selectedWaypoint == null)
+                        ? null
+                        : _navigateToWaypoint,
+                    icon: _isNavigating
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.white,
                               ),
-                            )
-                          : const Icon(Icons.navigation),
-                      label: Text(
+                            ),
+                          )
+                        : const Icon(Icons.navigation),
+                    label: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Text(
                         _isNavigating
-                            ? 'Navigating...'
-                            : 'Navigate to Waypoint',
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        backgroundColor: Colors.blue,
-                        foregroundColor: Colors.white,
+                            ? 'Starting Navigation...'
+                            : 'Start Navigation to Waypoint',
                       ),
                     ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                      foregroundColor: Colors.white,
+                      disabledBackgroundColor: Colors.grey,
+                    ),
                   ),
-                ],
-              ),
-            ),
-          ],
+                ),
+              ] else
+                // Empty state when no map is loaded
+                Center(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 64),
+                    child: Column(
+                      children: [
+                        Icon(
+                          Icons.map_outlined,
+                          size: 80,
+                          color: Colors.grey[400],
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          'Enter a map name to load waypoints',
+                          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                                color: Colors.grey[600],
+                              ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
+    );
+  }
+
+  Widget _buildInfoRow(String label, String value) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(
+          label,
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+        Text(
+          value,
+          style: Theme.of(context)
+              .textTheme
+              .bodyMedium
+              ?.copyWith(fontWeight: FontWeight.bold),
+        ),
+      ],
     );
   }
 

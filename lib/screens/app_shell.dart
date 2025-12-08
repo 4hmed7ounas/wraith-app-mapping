@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'mapping_screen.dart';
 import 'maps_screen.dart';
+import 'map_detail_screen.dart';
 
 class AppShell extends StatefulWidget {
   const AppShell({super.key});
@@ -20,6 +21,7 @@ class _AppShellState extends State<AppShell> {
     _pages = [
       const MappingScreen(),
       const MapsScreen(),
+      const MapDetailScreen(),
     ];
   }
 
@@ -42,6 +44,10 @@ class _AppShellState extends State<AppShell> {
           BottomNavigationBarItem(
             icon: Icon(Icons.map),
             label: 'Maps',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.navigation),
+            label: 'Navigate',
           ),
         ],
         currentIndex: _selectedIndex,

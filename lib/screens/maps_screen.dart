@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/map_model.dart';
 import '../services/map_storage_service.dart';
-import 'map_detail_screen.dart';
 
 class MapsScreen extends StatefulWidget {
   const MapsScreen({super.key});
@@ -28,7 +27,7 @@ class _MapsScreenState extends State<MapsScreen> {
     });
 
     try {
-      final maps = await _storageService.loadMaps();
+      await _storageService.loadMaps();
       setState(() {
         _maps = _storageService.getSortedMaps();
         _isLoading = false;
@@ -48,15 +47,35 @@ class _MapsScreenState extends State<MapsScreen> {
     }
   }
 
-  void _openMapDetail(SavedMap map) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => MapDetailScreen(map: map),
+  void _viewMapInfo(SavedMap map) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(map.name),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Created: ${_formatDateTime(map.createdAt)}'),
+            const SizedBox(height: 8),
+            Text('Waypoints: ${map.waypoints.length}'),
+            const SizedBox(height: 8),
+            Text('Map ID: ${map.id}'),
+            const SizedBox(height: 16),
+            const Text(
+              'To navigate to waypoints, go to the Navigate tab and enter this map name.',
+              style: TextStyle(fontStyle: FontStyle.italic, fontSize: 12),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
       ),
-    ).then((_) {
-      _loadMaps();
-    });
+    );
   }
 
   Future<void> _deleteMap(SavedMap map) async {
@@ -155,7 +174,7 @@ class _MapsScreenState extends State<MapsScreen> {
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
       child: InkWell(
-        onTap: () => _openMapDetail(map),
+        onTap: () => _viewMapInfo(map),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -245,5 +264,10 @@ class _MapsScreenState extends State<MapsScreen> {
 
   String _formatDate(DateTime date) {
     return '${date.day}/${date.month}/${date.year}';
+  }
+
+  String _formatDateTime(DateTime dateTime) {
+    return '${dateTime.day}/${dateTime.month}/${dateTime.year} '
+        '${dateTime.hour.toString().padLeft(2, '0')}:${dateTime.minute.toString().padLeft(2, '0')}';
   }
 }

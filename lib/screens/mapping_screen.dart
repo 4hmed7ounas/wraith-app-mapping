@@ -21,6 +21,7 @@ class _MappingScreenState extends State<MappingScreen> {
 
   bool _isConnected = false;
   bool _isMappingStarted = false;
+  bool _isSlamActive = false;
   bool _isAutoMode = false;
   bool _isManualMode = false;
   bool _isSaving = false;
@@ -34,6 +35,22 @@ class _MappingScreenState extends State<MappingScreen> {
     super.initState();
     _portController.text = '5000';
     _storageService = MapStorageService();
+    _loadRobotUrlFromProvider();
+  }
+
+  void _loadRobotUrlFromProvider() {
+    final robotUrlProvider = Provider.of<RobotUrlProvider>(context, listen: false);
+    if (robotUrlProvider.isConfigured()) {
+      final robotUrl = robotUrlProvider.robotUrl;
+      // Parse the URL to extract IP and port
+      try {
+        final uri = Uri.parse(robotUrl);
+        _ipController.text = uri.host;
+        _portController.text = uri.port.toString();
+      } catch (e) {
+        // If parsing fails, leave fields empty
+      }
+    }
   }
 
   @override
@@ -58,8 +75,14 @@ class _MappingScreenState extends State<MappingScreen> {
       return;
     }
 
+    // Auto-attach http:// if not provided
+    String finalUrl = _robotUrl.trim();
+    if (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://')) {
+      finalUrl = 'http://$finalUrl';
+    }
+
     try {
-      _mappingService = MappingService(robotUrl: _robotUrl);
+      _mappingService = MappingService(robotUrl: finalUrl);
       final isConnected = await _mappingService.checkConnection();
 
       if (!mounted) return;
@@ -67,13 +90,14 @@ class _MappingScreenState extends State<MappingScreen> {
       if (isConnected) {
         setState(() {
           _isConnected = true;
-          _statusMessage = 'Connected to robot at $_robotUrl';
+          _statusMessage = 'Connected to robot at $finalUrl';
         });
-        _showMessage('Connected to robot', Colors.green);
+        _showMessage('Robot Activated!', Colors.green);
 
+        // Save to provider
         if (mounted) {
           Provider.of<RobotUrlProvider>(context, listen: false)
-              .setRobotUrl(_robotUrl);
+              .setRobotUrl(finalUrl);
         }
       } else {
         _showMessage('Failed to connect to robot', Colors.red);
@@ -87,6 +111,7 @@ class _MappingScreenState extends State<MappingScreen> {
     setState(() {
       _isConnected = false;
       _isMappingStarted = false;
+      _isSlamActive = false;
       _isAutoMode = false;
       _isManualMode = false;
       _statusMessage = 'Disconnected';
@@ -104,9 +129,9 @@ class _MappingScreenState extends State<MappingScreen> {
       final result = await _mappingService.startMapping();
       setState(() {
         _isMappingStarted = true;
-        _statusMessage = result;
+        _statusMessage = result['message'] ?? 'Mapping started';
       });
-      _showMessage(result, Colors.green);
+      _showMessage(result['message'] ?? 'Mapping started', Colors.green);
     } catch (e) {
       _showMessage('Error: $e', Colors.red);
     }
@@ -122,11 +147,30 @@ class _MappingScreenState extends State<MappingScreen> {
       final result = await _mappingService.stopMapping();
       setState(() {
         _isMappingStarted = false;
+        _isSlamActive = false;
         _isManualMode = false;
         _isAutoMode = false;
-        _statusMessage = result;
+        _statusMessage = result['message'] ?? 'Mapping stopped';
       });
-      _showMessage(result, Colors.green);
+      _showMessage(result['message'] ?? 'Mapping stopped', Colors.green);
+    } catch (e) {
+      _showMessage('Error: $e', Colors.red);
+    }
+  }
+
+  Future<void> _activateSlam() async {
+    if (!_isConnected || !_isMappingStarted) {
+      _showMessage('Start mapping first', Colors.orange);
+      return;
+    }
+
+    try {
+      final result = await _mappingService.activateSlam();
+      setState(() {
+        _isSlamActive = true;
+        _statusMessage = result['message'] ?? 'SLAM activated';
+      });
+      _showMessage(result['message'] ?? 'SLAM activated', Colors.green);
     } catch (e) {
       _showMessage('Error: $e', Colors.red);
     }
@@ -144,46 +188,22 @@ class _MappingScreenState extends State<MappingScreen> {
     });
 
     try {
-      final result = await _mappingService.saveMapping();
+      // Generate map name with timestamp
+      final mapName = 'map_${DateTime.now().millisecondsSinceEpoch}';
+      final result = await _mappingService.saveMapping(mapName: mapName);
 
       if (!mounted) return;
 
-      if (result['success'] == true) {
-        final waypoints = [
-          Waypoint(
-            id: 'wp_1',
-            name: 'Start Point',
-            x: 0.0,
-            y: 0.0,
-            theta: 0.0,
-          ),
-          Waypoint(
-            id: 'wp_2',
-            name: 'Mid Point',
-            x: 5.0,
-            y: 5.0,
-            theta: 45.0,
-          ),
-        ];
-
-        final savedMap = SavedMap(
-          id: DateTime.now().millisecondsSinceEpoch.toString(),
-          name: 'Map_${DateTime.now().toString().split('.')[0]}',
-          imagePath: 'assets/maps/map_${DateTime.now().millisecondsSinceEpoch}.png',
-          mapXmlPath: 'assets/maps/map_${DateTime.now().millisecondsSinceEpoch}.xml',
-          waypointsXmlPath: 'assets/maps/waypoints_${DateTime.now().millisecondsSinceEpoch}.xml',
-          createdAt: DateTime.now(),
-          waypoints: waypoints,
-        );
-
-        await _storageService.saveMap(savedMap);
+      if (result['status'] == 'ok') {
+        // Parse waypoints from result
+        final waypointFiles = result['files'];
 
         setState(() {
           _isSaving = false;
-          _statusMessage = 'Map saved successfully!';
+          _statusMessage = 'Map saved: ${result['map_name']}';
         });
 
-        _showMessage('Map saved successfully!', Colors.green);
+        _showMessage('Map saved: ${result['map_name']}', Colors.green);
 
       } else {
         setState(() {
@@ -380,11 +400,16 @@ class _MappingScreenState extends State<MappingScreen> {
                     keyboardType: TextInputType.number,
                   ),
                   const SizedBox(height: 16),
-                  ElevatedButton(
+                  ElevatedButton.icon(
                     onPressed: _handleConnect,
-                    child: const Padding(
+                    icon: const Icon(Icons.power_settings_new),
+                    label: const Padding(
                       padding: EdgeInsets.all(12),
                       child: Text('Activate Robot'),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue,
+                      foregroundColor: Colors.white,
                     ),
                   ),
                 ],
@@ -405,7 +430,7 @@ class _MappingScreenState extends State<MappingScreen> {
               ),
             const SizedBox(height: 20),
 
-            // Mapping Controls
+            // Mapping Controls - Start/Stop Mapping
             if (_isConnected)
               Column(
                 children: [
@@ -455,37 +480,66 @@ class _MappingScreenState extends State<MappingScreen> {
                     ],
                   ),
                   const SizedBox(height: 8),
-                  if (!_isMappingStarted)
+
+                  // Activate SLAM button (shown when mapping is started)
+                  if (_isMappingStarted && !_isSlamActive)
+                    ElevatedButton.icon(
+                      onPressed: _activateSlam,
+                      icon: const Icon(Icons.terminal),
+                      label: const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: Text(
+                          'Activate SLAM',
+                          style: TextStyle(color: Colors.white),
+                        ),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.cyan,
+                      ),
+                    ),
+
+                  // Save Map button (shown when mapping is stopped)
+                  if (!_isMappingStarted && !_isSaving)
+                    ElevatedButton.icon(
+                      onPressed: _saveMapping,
+                      icon: const Icon(Icons.save),
+                      label: const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: Text(
+                          'Save Map',
+                          style: TextStyle(color: Colors.white),
+                        ),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                      ),
+                    )
+                  else if (_isSaving)
                     ElevatedButton(
-                      onPressed: _isSaving ? null : _saveMapping,
+                      onPressed: null,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.green,
                         disabledBackgroundColor: Colors.grey,
                       ),
-                      child: Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: _isSaving
-                            ? const SizedBox(
-                                height: 20,
-                                width: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  valueColor: AlwaysStoppedAnimation<Color>(
-                                    Colors.white,
-                                  ),
-                                ),
-                              )
-                            : const Text(
-                                'Save Map',
-                                style: TextStyle(color: Colors.white),
-                              ),
+                      child: const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              Colors.white,
+                            ),
+                          ),
+                        ),
                       ),
                     ),
                 ],
               ),
             const SizedBox(height: 20),
 
-            // Mode Selection
+            // Mode Selection (Manual/Auto)
             if (_isConnected && _isMappingStarted)
               Column(
                 children: [
@@ -608,7 +662,7 @@ class _MappingScreenState extends State<MappingScreen> {
                               child: Container(
                                 width: 60,
                                 height: 60,
-                                decoration: BoxDecoration(
+                                decoration: const BoxDecoration(
                                   color: Colors.red,
                                   shape: BoxShape.circle,
                                 ),
