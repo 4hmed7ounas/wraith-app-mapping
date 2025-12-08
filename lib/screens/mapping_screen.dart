@@ -13,6 +13,7 @@ class MappingScreen extends StatefulWidget {
 class _MappingScreenState extends State<MappingScreen> {
   final TextEditingController _ipController = TextEditingController();
   final TextEditingController _portController = TextEditingController();
+  final TextEditingController _mapNameController = TextEditingController();
 
   late MappingService _mappingService;
 
@@ -53,6 +54,7 @@ class _MappingScreenState extends State<MappingScreen> {
   void dispose() {
     _ipController.dispose();
     _portController.dispose();
+    _mapNameController.dispose();
     super.dispose();
   }
 
@@ -172,7 +174,50 @@ class _MappingScreenState extends State<MappingScreen> {
     }
   }
 
-  Future<void> _saveMapping() async {
+  Future<void> _showSaveMapDialog() async {
+    _mapNameController.clear();
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Save Map'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Enter a name for your map:'),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _mapNameController,
+              decoration: InputDecoration(
+                labelText: 'Map Name',
+                hintText: 'e.g., office_map, home_1',
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              autofocus: true,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (result == true && _mapNameController.text.trim().isNotEmpty) {
+      await _saveMapping(_mapNameController.text.trim());
+    }
+  }
+
+  Future<void> _saveMapping(String mapName) async {
     if (!_isConnected) {
       _showMessage('Robot not connected', Colors.red);
       return;
@@ -184,21 +229,17 @@ class _MappingScreenState extends State<MappingScreen> {
     });
 
     try {
-      // Generate map name with timestamp
-      final mapName = 'map_${DateTime.now().millisecondsSinceEpoch}';
       final result = await _mappingService.saveMapping(mapName: mapName);
 
       if (!mounted) return;
 
       if (result['status'] == 'ok') {
-        // Parse waypoints from result
         setState(() {
           _isSaving = false;
           _statusMessage = 'Map saved: ${result['map_name']}';
         });
 
         _showMessage('Map saved: ${result['map_name']}', Colors.green);
-
       } else {
         setState(() {
           _isSaving = false;
@@ -495,7 +536,7 @@ class _MappingScreenState extends State<MappingScreen> {
                   // Save Map button (always shown)
                   if (!_isSaving)
                     ElevatedButton.icon(
-                      onPressed: _isConnected ? _saveMapping : null,
+                      onPressed: _isConnected ? _showSaveMapDialog : null,
                       icon: const Icon(Icons.save),
                       label: const Padding(
                         padding: EdgeInsets.all(12),
