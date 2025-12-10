@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'mapping_screen.dart';
 import 'maps_screen.dart';
 import 'map_detail_screen.dart';
+import 'streaming_screen.dart';
 
 class AppShell extends StatefulWidget {
   const AppShell({super.key});
@@ -22,6 +23,7 @@ class _AppShellState extends State<AppShell> {
       const MappingScreen(),
       const MapsScreen(),
       const MapDetailScreen(),
+      const CameraStreamScreen(),
     ];
   }
 
@@ -48,6 +50,10 @@ class _AppShellState extends State<AppShell> {
           BottomNavigationBarItem(
             icon: Icon(Icons.navigation),
             label: 'Navigate',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.videocam),
+            label: 'Stream',
           ),
         ],
         currentIndex: _selectedIndex,
