@@ -30,6 +30,13 @@ class _AppShellState extends State<AppShell> {
   void _onItemTapped(int index) {
     setState(() {
       _selectedIndex = index;
+
+      // Recreate the streaming screen whenever its tab is selected
+      // so that initState runs again and the Flask streaming endpoint
+      // is hit each time the user navigates to this screen.
+      if (index == 3) {
+        _pages[3] = CameraStreamScreen(key: UniqueKey());
+      }
     });
   }
 
